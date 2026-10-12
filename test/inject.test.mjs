@@ -378,7 +378,7 @@ test("the injected app opens an existing local Codex task instead of a new compo
 test("remote Codex tasks wait for the exact project and host before opening the conversation", () => {
   const remoteProjectSource = source.slice(
     source.indexOf("async function waitForRemoteProject"),
-    source.indexOf("async function openThread"),
+    source.indexOf("async function waitForRemoteThreadRow"),
   );
   const openThreadSource = source.slice(
     source.indexOf("async function openThread"),
@@ -396,9 +396,9 @@ test("remote Codex tasks wait for the exact project and host before opening the 
   assert.match(remoteProjectSource, /selectedProject\?\.projectKind === "remote"/);
   assert.match(remoteProjectSource, /selectedProject\.hostId === hostId/);
   assert.match(remoteProjectSource, /!workspacePath \|\| selectedProject\.workspacePath === workspacePath/);
-  assert.match(remoteOpenSource, /findThreadRowInProject\(normalizedThreadId, projectId\)/);
-  assert.match(remoteOpenSource, /path: routeForThread\(normalizedThreadId, hostId\)/);
+  assert.match(remoteOpenSource, /waitForRemoteThreadRow\(normalizedThreadId, projectId\)/);
   assert.match(remoteOpenSource, /type: "taskboard:thread-open-error"/);
+  assert.doesNotMatch(remoteOpenSource, /routeForThread/);
   assert.match(webApp, /openThread\(conversation\.threadBinding\)/);
   assert.match(webApp, /onOpenThread=\{openThread\}/);
   assert.match(webApp, /project\.id === binding\.codexProjectId[\s\S]*?project\.hostId === binding\.codexHostId[\s\S]*?project\.workspacePath === binding\.workspacePath/);
@@ -407,26 +407,26 @@ test("remote Codex tasks wait for the exact project and host before opening the 
 
 function remoteThreadOpenHarness(row) {
   const openThreadSource = source.slice(
-    source.indexOf("async function openThread"),
+    source.indexOf("async function waitForRemoteThreadRow"),
     source.indexOf("async function nativeProjectContext"),
   );
-  const routeSource = source.slice(
-    source.indexOf("function routeForThread"),
-    source.indexOf("function threadRowProjectId"),
+  const lookupSource = source.slice(
+    source.indexOf("function findThreadRow("),
+    source.indexOf("async function waitForRemoteProject"),
   );
   const actions = [];
   const messages = [];
   const errors = [];
   const open = vm.runInNewContext(`(() => {
     let lastNativeThreadId = "";
-    ${routeSource}
+    ${lookupSource}
     ${openThreadSource}
     return openThread;
   })()`, {
     normalizeThreadId: (value) => value,
     waitForRemoteProject: async (...identity) => actions.push(["project", ...identity]),
-    findThreadRowInProject: () => row,
-    findThreadRow: () => row,
+    document: { querySelectorAll: () => row ? [row] : [] },
+    window: { setTimeout },
     closeTaskboard: () => actions.push(["close"]),
     dispatchHostMessage: (message) => messages.push(message),
     postToFrame: (message) => errors.push(message),
@@ -443,24 +443,32 @@ const remoteThreadBinding = {
   workspacePath: "/home/coder/tools",
 };
 
-test("a remote conversation outside the project sidebar opens on its saved SSH host", async () => {
-  const harness = remoteThreadOpenHarness(null);
+test("a remote conversation in Tasks or Pinned opens through its native sidebar row", async () => {
+  let clicks = 0;
+  const harness = remoteThreadOpenHarness({
+    isConnected: true,
+    getAttribute: () => remoteThreadBinding.threadId,
+    closest: () => null,
+    click: () => { clicks += 1; },
+  });
   await harness.open(remoteThreadBinding);
   assert.deepEqual(harness.errors, []);
   assert.deepEqual(harness.actions, [
     ["project", remoteThreadBinding.codexProjectId, remoteThreadBinding.codexHostId, remoteThreadBinding.workspacePath],
     ["close"],
   ]);
-  assert.equal(harness.messages.length, 1);
-  assert.equal(harness.messages[0].type, "navigate-to-route");
-  const route = new URL(harness.messages[0].path, "https://codex.invalid");
-  assert.equal(route.pathname, `/local/${remoteThreadBinding.threadId}`);
-  assert.equal(route.searchParams.get("hostId"), remoteThreadBinding.codexHostId);
+  assert.equal(clicks, 1);
+  assert.deepEqual(harness.messages, []);
 });
 
 test("a visible remote conversation still opens through its existing sidebar row", async () => {
   let clicks = 0;
-  const harness = remoteThreadOpenHarness({ isConnected: true, click: () => { clicks += 1; } });
+  const harness = remoteThreadOpenHarness({
+    isConnected: true,
+    getAttribute: () => remoteThreadBinding.threadId,
+    closest: () => ({ getAttribute: () => remoteThreadBinding.codexProjectId }),
+    click: () => { clicks += 1; },
+  });
   await harness.open(remoteThreadBinding);
   assert.equal(clicks, 1);
   assert.deepEqual(harness.messages, []);

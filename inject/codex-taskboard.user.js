@@ -968,10 +968,7 @@
       .find((row) => normalizeThreadId(row.getAttribute("data-app-action-sidebar-thread-id")) === normalizeThreadId(threadId)) || null;
   }
 
-  function routeForThread(threadId, hostId = "") {
-    if (hostId) {
-      return `/local/${encodeURIComponent(threadId)}?hostId=${encodeURIComponent(hostId)}`;
-    }
+  function routeForThread(threadId) {
     return `/local/${encodeURIComponent(threadId)}`;
   }
 
@@ -1053,6 +1050,16 @@
     ));
   }
 
+  async function waitForRemoteThreadRow(threadId, projectId) {
+    const deadline = Date.now() + 8_000;
+    let row = findThreadRowInProject(threadId, projectId) || findThreadRow(threadId);
+    while (!row && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      row = findThreadRowInProject(threadId, projectId) || findThreadRow(threadId);
+    }
+    return row;
+  }
+
   async function openThread(payload) {
     const threadId = typeof payload?.threadId === "string" ? payload.threadId : "";
     if (typeof threadId !== "string" || !threadId.trim()) return;
@@ -1070,17 +1077,16 @@
           ? payload.workspacePath.trim()
           : "";
         await waitForRemoteProject(projectId, hostId, workspacePath);
-        const row = findThreadRowInProject(normalizedThreadId, projectId);
+        const row = await waitForRemoteThreadRow(normalizedThreadId, projectId);
+        if (!row?.isConnected) {
+          throw new Error(hostText(
+            "目标 SSH 远程项目中找不到该对话",
+            "The conversation is not available in the target SSH remote project",
+          ));
+        }
         lastNativeThreadId = normalizedThreadId;
         closeTaskboard(false);
-        if (row?.isConnected) {
-          row.click?.();
-          return;
-        }
-        await dispatchHostMessage({
-          type: "navigate-to-route",
-          path: routeForThread(normalizedThreadId, hostId),
-        });
+        row.click?.();
       } catch (error) {
         postToFrame({
           type: "taskboard:thread-open-error",
